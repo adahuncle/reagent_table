@@ -22,7 +22,7 @@ def summarize_text(text, max_lines=5):
     if not isinstance(text, str):
         return text
     parts = [p.strip(" ;,") for p in text.split(";") if p.strip()]
-    return "\n• " + "\n• ".join(parts[:max_lines]) + ("\n..." if len(parts) > max_lines else "")
+    return "\n " + "\n ".join(parts[:max_lines]) + ("\n..." if len(parts) > max_lines else "")
 
 def generate_hazards_summary(row):
     hazard_fields = [
@@ -44,36 +44,46 @@ def generate_hazards_summary(row):
         summary = "\n".join(" ".join(words[i:i+15]) for i in range(0, len(words), 15))
     return summary
 
-def make_composite_image(image_path, text_lines, text_position="bottom", font_size=14):
+def make_composite_image(image_path, text_lines, text_position="bottom", font_size=14, box_opacity=255, padding=8):
     base_img = PILImage.open(image_path).convert("RGBA")
+
     try:
         font = ImageFont.truetype("arial.ttf", font_size)
     except OSError:
         font = ImageFont.load_default()
 
-    spacing = 5
     draw = ImageDraw.Draw(base_img)
-    text_height = sum(
+    spacing = 4
+
+    # Calculate total text height
+    line_heights = [
         draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1]
         for line in text_lines
-    ) + spacing * (len(text_lines) - 1)
+    ]
+    total_text_height = sum(line_heights) + spacing * (len(text_lines) - 1)
+    max_line_width = max(draw.textlength(line, font=font) for line in text_lines)
 
-    new_height = base_img.height + text_height + 10
-    new_img = PILImage.new("RGBA", (base_img.width, new_height), "white")
+    # Define box size and position
+    box_height = total_text_height + 2 * padding
+    box_width = base_img.width  # full width of image
 
     if text_position == "top":
-        new_img.paste(base_img, (0, text_height + 5))
-        y_text = 5
+        box_y = 0
     else:
-        new_img.paste(base_img, (0, 0))
-        y_text = base_img.height + 5
+        box_y = base_img.height - box_height
 
-    draw = ImageDraw.Draw(new_img)
+    # Draw text background box
+    box = PILImage.new("RGBA", (box_width, box_height), (255, 255, 255, box_opacity))
+    base_img.alpha_composite(box, (0, box_y))
+
+    # Draw text on top of the box
+    draw = ImageDraw.Draw(base_img)
+    y = box_y + padding
     for line in text_lines:
-        draw.text((5, y_text), line, font=font, fill="black")
-        y_text += font_size + spacing
+        draw.text((padding, y), line, font=font, fill="black")
+        y += font_size + spacing
 
-    return new_img
+    return base_img
 
 def choose_template():
     templates = [f for f in os.listdir(TEMPLATE_DIR) if f.endswith(".json")]
@@ -152,12 +162,17 @@ def generate_excel_from_template(template_path=None):
                                 value = "\n".join(" ".join(words[i:i+15]) for i in range(0, len(words), 15))
 
                             content.append(f"{prefix}{value}")
-                wrapped_lines = []
+                # Each field's wrapped content starts on its own line
+                line_chunks = []
                 for line in content:
                     words = str(line).split()
-                    wrapped = "\n".join(" ".join(words[i:i+15]) for i in range(0, len(words), 15))
-                    wrapped_lines.append(wrapped)
-                excel_row.append("\n".join(wrapped_lines))
+                    if len(words) > 15:
+                        wrapped = "\n".join(" ".join(words[i:i+15]) for i in range(0, len(words), 15))
+                    else:
+                        wrapped = line
+                    line_chunks.append(wrapped)
+                excel_row.append("\n".join(line_chunks))
+
 
             elif col_type == "image":
                 excel_row.append("")
@@ -213,10 +228,17 @@ def generate_excel_from_template(template_path=None):
         for i in range(1, ws.max_row + 1):
             cell = ws.cell(row=i, column=j + 1)
             text = str(cell.value or "")
-            word_count = len(text.split())
-            max_length = max(max_length, len(text))
-            if word_count > 15:
+            line_count = text.count("\n") + 1 if text else 1
+
+            # Always enable text wrap if multiline or composite
+            if "\n" in text or col.get("type") == "composite":
                 cell.alignment = Alignment(wrap_text=True, vertical="center")
+
+            # Adjust row height if multiline
+            if line_count > 1:
+                ws.row_dimensions[i].height = max(ws.row_dimensions[i].height or 15, line_count * 15)
+
+            max_length = max(max_length, len(text))
         ws.column_dimensions[col_letter].width = min(
             max(ws.column_dimensions[col_letter].width or 10, max_length / 1.5 + 2),
             70

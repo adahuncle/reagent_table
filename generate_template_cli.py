@@ -31,20 +31,25 @@ def fuzzy_field_prompt(available_fields, prompt):
         print("❌ Invalid selection. Try again.")
 
 def build_column(available_fields):
-    while True:
-        col_type = input("Column type [composite/blank]: ").strip().lower()
-        if col_type in {"text", "image", "composite", "blank"}:
-            break
-        print("❌ Invalid. Choose from [text/image/composite/blank].")
+    def select_indexed_option(prompt_text, options):
+        while True:
+            print(prompt_text)
+            for i, opt in enumerate(options):
+                print(f"  [{i}] {opt}")
+            choice = input("Enter number: ").strip()
+            if choice.isdigit() and 0 <= int(choice) < len(options):
+                return options[int(choice)]
+            print("❌ Invalid selection. Try again.")
 
+    col_type_options = ["text", "image", "composite", "blank"]
+    col_type = select_indexed_option("Column type:", col_type_options)
     col_def = {"type": col_type}
+
     if col_type != "blank":
         col_def["header"] = input("Header name for this column: ").strip()
 
     if col_type == "text":
-        source = input("Source [core/properties]: ").strip().lower()
-        while source not in {"core", "properties"}:
-            source = input("❌ Choose 'core' or 'properties': ").strip().lower()
+        source = select_indexed_option("Select source:", ["core", "properties"])
         col_def["source"] = source
         col_def["field"] = fuzzy_field_prompt(available_fields[source], "Select text field")
 
@@ -54,34 +59,25 @@ def build_column(available_fields):
     elif col_type == "composite":
         col_def["components"] = []
         while True:
-            ctype = input("Add component [text/image/done]: ").strip().lower()
-            if ctype == "done":
+            component_type = select_indexed_option("Add component:", ["text", "image", "done"])
+            if component_type == "done":
                 if not col_def["components"]:
                     print("❌ At least one component is required.")
                     continue
                 break
-            elif ctype == "text":
-                source = input("Source [core/properties]: ").strip().lower()
-                while source not in {"core", "properties"}:
-                    source = input("❌ Choose 'core' or 'properties': ").strip().lower()
+            elif component_type == "text":
+                source = select_indexed_option("Select source:", ["core", "properties"])
                 field = fuzzy_field_prompt(available_fields[source], "Select text field")
                 prefix = input("Optional prefix: ").strip()
                 comp = {"type": "text", "source": source, "field": field}
                 if prefix:
                     comp["prefix"] = prefix
                 col_def["components"].append(comp)
-            elif ctype == "image":
+            elif component_type == "image":
                 field = fuzzy_field_prompt(available_fields["core"], "Select image field")
                 col_def["components"].append({"type": "image", "field": field})
-            else:
-                print("❌ Invalid component type.")
 
-        while True:
-            pos = input("Text position relative to image [top/bottom]: ").strip().lower()
-            if pos in {"top", "bottom"}:
-                col_def["text_position"] = pos
-                break
-            print("❌ Choose either 'top' or 'bottom'.")
+        col_def["text_position"] = select_indexed_option("Text position relative to image:", ["top", "bottom"])
 
     return col_def
 

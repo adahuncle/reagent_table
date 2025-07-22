@@ -2,7 +2,7 @@
   "columns": [
     {
       "type": "composite",
-      "header": "Chemical Name & Formula",
+      "header": "Name & Formula",
       "components": [
         {
           "type": "text",
@@ -12,10 +12,15 @@
         {
           "type": "text",
           "source": "core",
+          "field": "common_name"
+        },
+        {
+          "type": "text",
+          "source": "core",
           "field": "formula"
         }
       ],
-      "text_position": "top"
+      "text_position": "bottom"
     },
     {
       "type": "composite",
@@ -27,15 +32,23 @@
         },
         {
           "type": "text",
-          "source": "properties",
-          "field": "Molecular Weight",
+          "source": "core",
+          "field": "molecular_weight",
           "prefix": "MW:"
         }
       ],
-      "text_position": "top"
+      "text_position": "bottom"
     },
     {
       "type": "blank"
+    },
+    {
+      "type": "blank"
+    },
+    {
+      "type": "image",
+      "header": "Tester",
+      "field": "image_path"
     },
     {
       "type": "composite",
@@ -61,18 +74,28 @@
         },
         {
           "type": "text",
-          "source": "properties",
-          "field": "Color/Form",
-          "prefix": "Appearance:"
+          "source": "core",
+          "field": "smiles"
         },
         {
           "type": "text",
           "source": "properties",
-          "field": "Uses",
-          "prefix": "Uses:"
+          "field": "IUPAC Name - Preferred"
         }
       ],
-      "text_position": "top"
+      "text_position": "bottom"
+    },
+    {
+      "type": "composite",
+      "header": "Uses",
+      "components": [
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Uses"
+        }
+      ],
+      "text_position": "bottom"
     },
     {
       "type": "composite",
@@ -81,15 +104,17 @@
         {
           "type": "text",
           "source": "properties",
-          "field": "Hazards"
+          "field": "Hazards",
+          "prefix": "Hazards:"
         },
         {
           "type": "text",
           "source": "properties",
-          "field": "First Aid Measures"
+          "field": "First Aid Measures",
+          "prefix": "First Aid:"
         }
       ],
-      "text_position": "top"
+      "text_position": "bottom"
     }
   ]
 }

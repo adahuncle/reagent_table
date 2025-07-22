@@ -55,29 +55,33 @@ def extract_hazard_traits(text):
     match = re.search(r"Hazard Traits\s*-\s*(.+?)(;|$)", text)
     return match.group(1) if match else ""
 
-def generate_hazards_summary_from_fields(hazards_dict):
-    summary_parts = []
-
+def extract_hazard_and_first_aid(hazards_dict):
+    """
+    Extracts raw 'Hazard Traits' and 'First Aid Measures' as clean, semicolon-separated strings.
+    Returns: (hazards_cleaned, first_aid_cleaned)
+    """
     reg_info = hazards_dict.get("Regulatory Information", "")
     first_aid = hazards_dict.get("First Aid Measures", "")
 
-    # Match all traits until a new line or next keyword
-    traits_match = re.search(
+    # Extract Hazard Traits
+    hazard_traits = ""
+    match = re.search(
         r"Hazard Traits\s*-\s*(.+?)(?:\s*(Authoritative List|Report|Status|Chemical|Restricted substance|List II Chemical|https?://|$))",
         reg_info,
-        re.IGNORECASE
+        re.IGNORECASE | re.DOTALL
     )
-    if traits_match:
-        traits = traits_match.group(1).strip(" ;")
-        if traits:
-            summary_parts.append(f"Hazard Traits: {traits}")
+    if match:
+        hazard_traits = match.group(1).strip(" ;.\n")
 
-    if first_aid:
-        summarized = summarize_text(first_aid, max_lines=3)
-        if summarized:
-            summary_parts.append(f"First Aid: {summarized}")
+    # Normalize newlines and semicolons in both fields
+    def clean_multiline(text):
+        if not text:
+            return ""
+        lines = [line.strip(" ;.\n") for line in text.splitlines() if line.strip()]
+        return "; ".join(lines)
 
-    return " | ".join(summary_parts) if summary_parts else ""
+    return clean_multiline(hazard_traits), clean_multiline(first_aid)
+
 
 def get_cid_by_name(name):
     url = f"{BASE_URL}/compound/name/{name}/cids/JSON"
@@ -102,6 +106,30 @@ def get_pug_view_data(cid):
     r = requests.get(url)
     r.raise_for_status()
     return r.json()
+
+def extract_common_name(view_data):
+    try:
+        sections = view_data.get("Record", {}).get("Section", [])
+        for sec in sections:
+            if sec.get("TOCHeading") == "Names and Identifiers":
+                for sub in sec.get("Section", []):
+                    if sub.get("TOCHeading") == "Synonyms":
+                        for info in sub.get("Information", []):
+                            synonyms = info.get("Value", {}).get("StringWithMarkup", [])
+                            names = [item.get("String") for item in synonyms if item.get("String")]
+                            if not names:
+                                continue
+
+                            # Prefer simple, short, ASCII, capitalized or lowercase names with no numbers
+                            clean_names = [n.strip() for n in names if n.isascii() and not any(c.isdigit() for c in n)]
+                            if clean_names:
+                                # Return the shortest alphabetic name
+                                return sorted(clean_names, key=lambda s: (len(s), s.lower()))[0]
+
+                            return names[0].strip()  # fallback: just return the first synonym
+    except Exception as e:
+        print(f"⚠️ Common name extraction failed: {e}")
+    return None
 
 def extract_experimental_properties(view_data):
     result = {}
@@ -189,6 +217,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS compounds (
             cid INTEGER PRIMARY KEY,
             name TEXT,
+            common_name TEXT,
             formula TEXT,
             molecular_weight REAL,
             smiles TEXT,
@@ -215,15 +244,16 @@ def init_db():
     conn.commit()
     return conn
 
-def insert_or_update_compound(conn, props, image_path):
+def insert_or_update_compound(conn, props, image_path, common_name):
     c = conn.cursor()
     c.execute('''
         INSERT OR REPLACE INTO compounds 
-        (cid, name, formula, molecular_weight, smiles, image_path)
-        VALUES (?, ?, ?, ?, ?, ?)
+        (cid, name, common_name, formula, molecular_weight, smiles, image_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (
         props.get("CID"),
         props.get("IUPACName"),
+        common_name,
         props.get("MolecularFormula"),
         props.get("MolecularWeight"),
         props.get("CanonicalSMILES"),
@@ -280,9 +310,11 @@ def process_compound_name(name):
         record_json = get_full_record(cid)
         view_json = get_pug_view_data(cid)
         image_path = save_structure_image(cid, name)
+        common_name = extract_common_name(view_json)
+        print(f"📛 Common Name selected: {common_name}")
 
         conn = init_db()
-        insert_or_update_compound(conn, props, image_path)
+        insert_or_update_compound(conn, props, image_path, common_name)
 
         computed = extract_computed_properties(record_json)
         insert_properties(conn, cid, "Computed", computed)
@@ -302,12 +334,14 @@ def process_compound_name(name):
             print("⚠️ No experimental data found via PUG-View.")
 
         if hazards:
-            # Only extract and insert safety summary
-            hazard_summary = generate_hazards_summary_from_fields(hazards)
-            if hazard_summary:
-                insert_properties(conn, cid, "Computed", {"Hazards Summary": hazard_summary})
-        else:
-            print("⚠️ No hazard data found via PUG-View.")
+            hazard_traits, first_aid = extract_hazard_and_first_aid(hazards)
+
+            if hazard_traits:
+                insert_properties(conn, cid, "Hazard", {"Hazards": hazard_traits})
+
+            if first_aid:
+                insert_properties(conn, cid, "Hazard", {"First Aid Measures": first_aid})
+
 
         build_wide_properties_table(conn)
         conn.close()
