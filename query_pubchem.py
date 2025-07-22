@@ -1,11 +1,11 @@
 import os
 import requests
 import sqlite3
-import json
-from bs4 import BeautifulSoup
+import pandas as pd
+import time
 
 BASE_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
-WEB_URL = "https://pubchem.ncbi.nlm.nih.gov/compound"
+VIEW_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound"
 DB_PATH = "compounds.db"
 IMAGE_DIR = "structure_images"
 
@@ -29,22 +29,79 @@ def get_full_record(cid):
     r.raise_for_status()
     return r.json()
 
-def scrape_experimental_properties(cid):
-    url = f"{WEB_URL}/{cid}"
+def get_pug_view_data(cid):
+    url = f"{VIEW_URL}/{cid}/JSON"
     r = requests.get(url)
     r.raise_for_status()
-    soup = BeautifulSoup(r.text, 'html.parser')
-    prop_blocks = soup.select("section div.section-content div.summary-view div.section-title")
-    found = {}
+    return r.json()
 
-    for block in prop_blocks:
-        label = block.text.strip()
-        value_el = block.find_next("div")
-        if value_el:
-            value = value_el.text.strip()
-            if any(k in label.lower() for k in ["melting", "boiling", "solubility", "ph", "logp", "density"]):
-                found[label] = value
-    return found
+def extract_experimental_properties(view_data):
+    result = {}
+    sections = view_data.get("Record", {}).get("Section", [])
+    def recurse_sections(sections):
+        for sec in sections:
+            heading = sec.get("TOCHeading", "")
+            if heading in ["Experimental Properties"]:
+                for sub in sec.get("Section", []):
+                    prop_name = sub.get("TOCHeading", "")
+                    for info in sub.get("Information", []):
+                        value = info.get("Value", {}).get("StringWithMarkup", [{}])[0].get("String")
+                        if value:
+                            result[prop_name] = value
+            elif "Section" in sec:
+                recurse_sections(sec["Section"])
+    recurse_sections(sections)
+    return result
+
+def extract_hazard_properties(view_data):
+    result = {}
+    sections = view_data.get("Record", {}).get("Section", [])
+
+    def recurse_sections(sections):
+        for sec in sections:
+            heading = sec.get("TOCHeading", "")
+            if heading == "Safety and Hazards":
+                for sub in sec.get("Section", []):
+                    subheading = sub.get("TOCHeading", "")
+                    values = []
+                    for info in sub.get("Information", []):
+                        value_data = info.get("Value", {}).get("StringWithMarkup", [])
+                        for item in value_data:
+                            string = item.get("String")
+                            if string:
+                                values.append(string)
+                    if values:
+                        result[subheading] = "; ".join(values)
+            elif "Section" in sec:
+                recurse_sections(sec["Section"])
+
+    recurse_sections(sections)
+    return result
+
+def extract_use_properties(view_data):
+    result = {}
+    sections = view_data.get("Record", {}).get("Section", [])
+
+    def recurse_sections(sections):
+        for sec in sections:
+            heading = sec.get("TOCHeading", "")
+            if heading == "Use and Manufacturing":
+                for sub in sec.get("Section", []):
+                    subheading = sub.get("TOCHeading", "")
+                    values = []
+                    for info in sub.get("Information", []):
+                        value_data = info.get("Value", {}).get("StringWithMarkup", [])
+                        for item in value_data:
+                            string = item.get("String")
+                            if string:
+                                values.append(string)
+                    if values:
+                        result[subheading] = "; ".join(values)
+            elif "Section" in sec:
+                recurse_sections(sec["Section"])
+
+    recurse_sections(sections)
+    return result
 
 def save_structure_image(cid, compound_name):
     image_url = f"{BASE_URL}/compound/cid/{cid}/PNG"
@@ -60,7 +117,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Compounds table
     c.execute('''
         CREATE TABLE IF NOT EXISTS compounds (
             cid INTEGER PRIMARY KEY,
@@ -72,13 +128,19 @@ def init_db():
         )
     ''')
 
-    # Properties table (grows dynamically)
     c.execute('''
         CREATE TABLE IF NOT EXISTS properties (
             cid INTEGER,
+            category TEXT,
             property_name TEXT,
             property_value TEXT,
-            PRIMARY KEY (cid, property_name)
+            PRIMARY KEY (cid, category, property_name)
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS compound_properties_wide (
+            cid INTEGER PRIMARY KEY
         )
     ''')
 
@@ -101,17 +163,17 @@ def insert_or_update_compound(conn, props, image_path):
     ))
     conn.commit()
 
-def insert_properties(conn, cid, properties: dict):
+def insert_properties(conn, cid, category, properties: dict):
     c = conn.cursor()
     for key, value in properties.items():
         c.execute('''
             INSERT OR REPLACE INTO properties
-            (cid, property_name, property_value)
-            VALUES (?, ?, ?)
-        ''', (cid, key, value))
+            (cid, category, property_name, property_value)
+            VALUES (?, ?, ?, ?)
+        ''', (cid, category, key.strip(), str(value).strip()))
     conn.commit()
 
-def extract_physical_properties(record_json):
+def extract_computed_properties(record_json):
     properties = {}
     props = record_json.get("PC_Compounds", [])[0].get("props", [])
     for prop in props:
@@ -119,12 +181,21 @@ def extract_physical_properties(record_json):
         name = prop.get("urn", {}).get("name", "")
         value = prop.get("value", {})
         key = f"{label} - {name}" if name else label
-
-        # Read numeric or string value
         val = value.get("sval") or value.get("fval") or value.get("ival")
         if val is not None:
-            properties[key.strip()] = str(val)
+            properties[key.strip()] = val
     return properties
+
+def build_wide_properties_table(conn):
+    df = pd.read_sql_query("SELECT * FROM properties", conn)
+    if df.empty:
+        print("⚠️ No properties data to pivot.")
+        return
+
+    df_wide = df.pivot_table(index="cid", columns="property_name", values="property_value", aggfunc='first')
+    df_wide.reset_index(inplace=True)
+    df_wide.to_sql("compound_properties_wide", conn, if_exists="replace", index=False)
+    print("📊 Wide-format properties table generated: compound_properties_wide")
 
 def process_compound_name(name):
     try:
@@ -132,20 +203,36 @@ def process_compound_name(name):
         cid = get_cid_by_name(name)
         props = get_properties_by_cid(cid)
         record_json = get_full_record(cid)
+        view_json = get_pug_view_data(cid)
         image_path = save_structure_image(cid, name)
 
         conn = init_db()
         insert_or_update_compound(conn, props, image_path)
 
-        # Extract from JSON
-        prop_data = extract_physical_properties(record_json)
+        computed = extract_computed_properties(record_json)
+        insert_properties(conn, cid, "Computed", computed)
 
-        # If none found, fallback to scraping
-        if not prop_data:
-            print("🧪 No JSON properties found. Scraping fallback...")
-            prop_data = scrape_experimental_properties(cid)
+        uses = extract_use_properties(view_json)
+        if uses:
+            insert_properties(conn, cid, "Uses", uses)
+        else:
+            print("⚠️ No use/manufacturing data found via PUG-View.")
 
-        insert_properties(conn, cid, prop_data)
+        experimental = extract_experimental_properties(view_json)
+        hazards = extract_hazard_properties(view_json)
+
+        if experimental:
+            insert_properties(conn, cid, "Experimental", experimental)
+        else:
+            print("⚠️ No experimental data found via PUG-View.")
+
+        if hazards:
+            insert_properties(conn, cid, "Hazards", hazards)
+        else:
+            print("⚠️ No hazard data found via PUG-View.")
+
+
+        build_wide_properties_table(conn)
         conn.close()
 
         print("\n✅ Compound Saved:")
@@ -155,14 +242,18 @@ def process_compound_name(name):
         print(f"MW: {props.get('MolecularWeight')} g/mol")
         print(f"SMILES: {props.get('CanonicalSMILES')}")
         print(f"Image Path: {image_path}")
-        print(f"🧪 {len(prop_data)} properties stored.")
+        print(f"🧪 {len(computed) + len(experimental)} properties stored.")
 
     except requests.exceptions.HTTPError as e:
         print(f"❌ HTTP Error: {e}")
     except Exception as e:
         print(f"⚠️ Unexpected Error: {e}")
 
-# CLI
 if __name__ == "__main__":
-    name = input("Enter compound name: ").strip()
-    process_compound_name(name)
+    input_str = input("Enter compound name(s), comma-separated: ").strip()
+    names = [name.strip() for name in input_str.split(',') if name.strip()]
+
+    for name in names:
+        print("\n" + "="*50)
+        process_compound_name(name)
+        time.sleep(1)

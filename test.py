@@ -3,7 +3,7 @@ import pandas as pd
 
 def inspect_table(conn, table_name):
     try:
-        df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 10", conn)
+        df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 50", conn)
 
         print(f"\n📋 Columns in '{table_name}':")
         print(list(df.columns))
@@ -19,6 +19,7 @@ def inspect_compounds_db(db_path="compounds.db"):
         conn = sqlite3.connect(db_path)
         inspect_table(conn, "compounds")
         inspect_table(conn, "properties")
+        inspect_table(conn, "compound_properties_wide")
 
     except Exception as e:
         print("⚠️ Database connection error:", e)

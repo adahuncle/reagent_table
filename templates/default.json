@@ -1,0 +1,55 @@
+{
+  "include_image": true,
+  "columns": [
+    {
+      "header": "Compound Name",
+      "source": "compounds",
+      "field": "name"
+    },
+    {
+      "header": "Formula",
+      "source": "compounds",
+      "field": "formula"
+    },
+    {
+      "header": "Structure & MW",
+      "type": "composite",
+      "components": [
+        {
+          "type": "image",
+          "field": "image_path"
+        },
+        {
+          "type": "text",
+          "source": "compounds",
+          "field": "molecular_weight",
+          "prefix": "MW: "
+        }
+      ]
+    },
+    {
+      "header": "Remarks",
+      "type": "composite",
+      "components": [
+        {
+          "type": "text",
+          "source": "compound_properties_wide",
+          "field": "Boiling Point",
+          "prefix": "BP: "
+        },
+        {
+          "type": "text",
+          "source": "compound_properties_wide",
+          "field": "Melting Point",
+          "prefix": "MP: "
+        },
+        {
+          "type": "text",
+          "source": "compound_properties_wide",
+          "field": "Density",
+          "prefix": "ρ: "
+        }
+      ]
+    }
+  ]
+}
