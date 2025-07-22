@@ -1,0 +1,76 @@
+{
+  "columns": [
+    {
+      "type": "text",
+      "header": "Chemical Name & Formula",
+      "source": "core",
+      "field": "name"
+    },
+    {
+      "type": "composite",
+      "header": "Structure & MW (g/mol)",
+      "components": [
+        {
+          "type": "image",
+          "field": "image_path"
+        },
+        {
+          "type": "text",
+          "source": "core",
+          "field": "molecular_weight",
+          "prefix": "MW:"
+        }
+      ],
+      "text_position": "bottom"
+    },
+    {
+      "type": "composite",
+      "header": "Remarks",
+      "components": [
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Melting Point",
+          "prefix": "MP:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Boiling Point",
+          "prefix": "BP:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Density",
+          "prefix": "Density:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Uses",
+          "summarize": true
+        }
+      ],
+      "text_position": "bottom"
+    },
+    {
+      "type": "composite",
+      "header": "Purpose",
+      "components": [
+        {
+          "type": "text",
+          "source": "",
+          "field": "",
+          "prefix": ""
+        }
+      ],
+      "text_position": "bottom"
+    },
+    {
+      "type": "computed",
+      "header": "Hazards",
+      "function": "generate_hazards_summary"
+    }
+  ]
+}
