@@ -3,6 +3,8 @@ import requests
 import sqlite3
 import pandas as pd
 import time
+import re
+import html
 
 BASE_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 VIEW_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound"
@@ -10,6 +12,72 @@ DB_PATH = "compounds.db"
 IMAGE_DIR = "structure_images"
 
 os.makedirs(IMAGE_DIR, exist_ok=True)
+
+def summarize_text(text, max_lines=5):
+    if not isinstance(text, str):
+        return text
+    parts = [p.strip(" ;,") for p in text.split(";") if p.strip()]
+    return "; ".join(parts[:max_lines]) + ("..." if len(parts) > max_lines else "")
+
+def normalize_property(prop_name, value):
+    prop_name = str(prop_name)
+    value = html.unescape(value)
+    value = re.sub(r"[^\x00-\x7F°±µ]+", " ", value)
+    value = value.replace("•", "-")
+
+    if not isinstance(value, str):
+        return value
+
+    value = value.strip()
+    lower_name = prop_name.lower()
+
+    # 🔍 Remove bracketed references like [ChemIDplus]
+    value = re.sub(r"\[[^\]]*?\]", "", value)
+
+    # 🧼 Clean None-like values
+    if value.lower() in {"none", "not available", "n/a", "null", "not applicable"}:
+        return ""
+
+    # 🔢 Extract numeric if applicable
+    # if any(key in lower_name for key in ["mass", "weight", "boiling", "melting", "logp", "density", "ph"]):
+        match = re.search(r"[-+]?[0-9]*\.?[0-9]+", value)
+        if match:
+            return match.group(0)
+
+    # ✂ Summarize long text
+    if any(key in lower_name for key in ["use", "hazard", "method", "impurities", "decomposition", "purpose", "manufacturing"]):
+        if len(value.split()) > 40:
+            return summarize_text(value, max_lines=5)
+
+    return value.strip()
+
+def extract_hazard_traits(text):
+    match = re.search(r"Hazard Traits\s*-\s*(.+?)(;|$)", text)
+    return match.group(1) if match else ""
+
+def generate_hazards_summary_from_fields(hazards_dict):
+    summary_parts = []
+
+    reg_info = hazards_dict.get("Regulatory Information", "")
+    first_aid = hazards_dict.get("First Aid Measures", "")
+
+    # Match all traits until a new line or next keyword
+    traits_match = re.search(
+        r"Hazard Traits\s*-\s*(.+?)(?:\s*(Authoritative List|Report|Status|Chemical|Restricted substance|List II Chemical|https?://|$))",
+        reg_info,
+        re.IGNORECASE
+    )
+    if traits_match:
+        traits = traits_match.group(1).strip(" ;")
+        if traits:
+            summary_parts.append(f"Hazard Traits: {traits}")
+
+    if first_aid:
+        summarized = summarize_text(first_aid, max_lines=3)
+        if summarized:
+            summary_parts.append(f"First Aid: {summarized}")
+
+    return " | ".join(summary_parts) if summary_parts else ""
 
 def get_cid_by_name(name):
     url = f"{BASE_URL}/compound/name/{name}/cids/JSON"
@@ -41,7 +109,7 @@ def extract_experimental_properties(view_data):
     def recurse_sections(sections):
         for sec in sections:
             heading = sec.get("TOCHeading", "")
-            if heading in ["Experimental Properties"]:
+            if heading == "Experimental Properties":
                 for sub in sec.get("Section", []):
                     prop_name = sub.get("TOCHeading", "")
                     for info in sub.get("Information", []):
@@ -166,11 +234,18 @@ def insert_or_update_compound(conn, props, image_path):
 def insert_properties(conn, cid, category, properties: dict):
     c = conn.cursor()
     for key, value in properties.items():
+        norm_key = str(key).strip()
+        norm_value = normalize_property(norm_key, str(value).strip())
+
+        # ⚠️ Only keep long text fields from specific subfields
+        if category == "Uses" and norm_key not in {"Uses", "Impurities"}:
+            continue
+
         c.execute('''
             INSERT OR REPLACE INTO properties
             (cid, category, property_name, property_value)
             VALUES (?, ?, ?, ?)
-        ''', (cid, category, key.strip(), str(value).strip()))
+        ''', (cid, category, norm_key, norm_value))
     conn.commit()
 
 def extract_computed_properties(record_json):
@@ -227,10 +302,12 @@ def process_compound_name(name):
             print("⚠️ No experimental data found via PUG-View.")
 
         if hazards:
-            insert_properties(conn, cid, "Hazards", hazards)
+            # Only extract and insert safety summary
+            hazard_summary = generate_hazards_summary_from_fields(hazards)
+            if hazard_summary:
+                insert_properties(conn, cid, "Computed", {"Hazards Summary": hazard_summary})
         else:
             print("⚠️ No hazard data found via PUG-View.")
-
 
         build_wide_properties_table(conn)
         conn.close()

@@ -1,0 +1,90 @@
+{
+  "columns": [
+    {
+      "type": "composite",
+      "header": "Chemical Name & Formula",
+      "components": [
+        {
+          "type": "text",
+          "source": "core",
+          "field": "name"
+        },
+        {
+          "type": "text",
+          "source": "core",
+          "field": "formula"
+        }
+      ],
+      "text_position": "top"
+    },
+    {
+      "type": "composite",
+      "header": "Structure & MW (g/mol)",
+      "components": [
+        {
+          "type": "image",
+          "field": "image_path"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Molecular Weight",
+          "prefix": "MW:"
+        }
+      ],
+      "text_position": "top"
+    },
+    {
+      "type": "blank"
+    },
+    {
+      "type": "composite",
+      "header": "Remarks",
+      "components": [
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Melting Point",
+          "prefix": "MP:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Boiling Point",
+          "prefix": "BP:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Density",
+          "prefix": "Density:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Color/Form",
+          "prefix": "Appearance:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Uses",
+          "prefix": "Uses:"
+        }
+      ],
+      "text_position": "top"
+    },
+    {
+      "type": "composite",
+      "header": "Hazards & First Aid",
+      "components": [
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Hazards Summary"
+        }
+      ],
+      "text_position": "top"
+    }
+  ]
+}

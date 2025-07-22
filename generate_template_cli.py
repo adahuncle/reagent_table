@@ -4,11 +4,8 @@ import os
 
 DB_PATH = "compounds.db"
 TEMPLATE_DIR = "templates"
-
-# Ensure templates directory exists
 os.makedirs(TEMPLATE_DIR, exist_ok=True)
 
-# Load fields from the database
 def load_fields():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -17,101 +14,106 @@ def load_fields():
     cur.execute("PRAGMA table_info(compound_properties_wide)")
     properties_fields = [row[1] for row in cur.fetchall()]
     conn.close()
-    return compounds_fields, properties_fields
+    return {"core": compounds_fields, "properties": properties_fields}
 
-# Prompt the user to select from fields
 def fuzzy_field_prompt(available_fields, prompt):
     while True:
         search = input(f"{prompt} (type partial field name to search): ").strip().lower()
         matches = [f for f in available_fields if search in f.lower()]
         if not matches:
-            print("No matches found. Try again.")
+            print("❌ No matches found. Try again.")
             continue
-        print("Matches:")
-        for i, match in enumerate(matches):
+        for i, match in enumerate(matches[:20]):
             print(f"  [{i}] {match}")
         idx = input("Enter number of desired field: ").strip()
-        if idx.isdigit() and 0 <= int(idx) < len(matches):
+        if idx.isdigit() and 0 <= int(idx) < len(matches[:20]):
             return matches[int(idx)]
-        print("Invalid selection. Try again.")
+        print("❌ Invalid selection. Try again.")
 
-# Build a column definition
 def build_column(available_fields):
-    column_type = input("Column type [text/image/composite/blank]: ").strip().lower()
-    while column_type not in {"text", "image", "composite", "blank"}:
-        column_type = input("❌ Invalid. Choose [text/image/composite/blank]: ").strip().lower()
+    while True:
+        col_type = input("Column type [composite/blank]: ").strip().lower()
+        if col_type in {"text", "image", "composite", "blank"}:
+            break
+        print("❌ Invalid. Choose from [text/image/composite/blank].")
 
-    col_def = {"type": column_type}
+    col_def = {"type": col_type}
+    if col_type != "blank":
+        col_def["header"] = input("Header name for this column: ").strip()
 
-    if column_type != "blank":
-        header = input("Header name for this column: ").strip()
-        col_def["header"] = header
-
-    if column_type == "text":
+    if col_type == "text":
         source = input("Source [core/properties]: ").strip().lower()
         while source not in {"core", "properties"}:
             source = input("❌ Choose 'core' or 'properties': ").strip().lower()
         col_def["source"] = source
-        field = fuzzy_field_prompt(available_fields[source], "Search field")
-        col_def["field"] = field
+        col_def["field"] = fuzzy_field_prompt(available_fields[source], "Select text field")
 
-    elif column_type == "image":
-        field = fuzzy_field_prompt(available_fields["core"], "Select image path field")
-        col_def["field"] = field
+    elif col_type == "image":
+        col_def["field"] = fuzzy_field_prompt(available_fields["core"], "Select image path field")
 
-    elif column_type == "composite":
+    elif col_type == "composite":
         col_def["components"] = []
         while True:
             ctype = input("Add component [text/image/done]: ").strip().lower()
             if ctype == "done":
+                if not col_def["components"]:
+                    print("❌ At least one component is required.")
+                    continue
                 break
             elif ctype == "text":
                 source = input("Source [core/properties]: ").strip().lower()
                 while source not in {"core", "properties"}:
                     source = input("❌ Choose 'core' or 'properties': ").strip().lower()
                 field = fuzzy_field_prompt(available_fields[source], "Select text field")
-                prefix = input("Prefix (or leave blank): ").strip()
+                prefix = input("Optional prefix: ").strip()
                 comp = {"type": "text", "source": source, "field": field}
                 if prefix:
                     comp["prefix"] = prefix
                 col_def["components"].append(comp)
             elif ctype == "image":
                 field = fuzzy_field_prompt(available_fields["core"], "Select image field")
-                comp = {"type": "image", "field": field}
-                col_def["components"].append(comp)
+                col_def["components"].append({"type": "image", "field": field})
             else:
-                print("❌ Invalid type.")
-        text_pos = input("Text position relative to image [top/bottom]: ").strip().lower()
-        if text_pos in {"top", "bottom"}:
-            col_def["text_position"] = text_pos
+                print("❌ Invalid component type.")
+
+        while True:
+            pos = input("Text position relative to image [top/bottom]: ").strip().lower()
+            if pos in {"top", "bottom"}:
+                col_def["text_position"] = pos
+                break
+            print("❌ Choose either 'top' or 'bottom'.")
 
     return col_def
 
-# Main function to create a template
 def main():
-    print("📋 Building new reagent table template...")
-    compounds_fields, properties_fields = load_fields()
-    available_fields = {"core": compounds_fields, "properties": properties_fields}
+    print("📋 Build a new reagent table template")
+    available_fields = load_fields()
 
-    template_name = ""
-    while not template_name or template_name.lower() == "default":
-        template_name = input("Enter a name for this template (not 'default'): ").strip()
-        if template_name.lower() == "default":
-            print("❌ 'default' is reserved. Choose another name.")
+    while True:
+        template_name = input("Enter template name (not 'default'): ").strip()
+        if template_name and template_name.lower() != "default":
+            break
+        print("❌ Invalid name. Please choose another.")
 
-    num_cols = int(input("How many columns do you want in your template? ").strip())
+    while True:
+        try:
+            num_cols = int(input("How many columns? ").strip())
+            if num_cols > 0:
+                break
+        except ValueError:
+            pass
+        print("❌ Please enter a valid positive number.")
 
     template = {"columns": []}
     for i in range(num_cols):
-        print(f"\n🧱 Defining column {i+1}/{num_cols}:")
-        col = build_column(available_fields)
-        template["columns"].append(col)
+        print(f"\n🧱 Column {i+1}/{num_cols}")
+        template["columns"].append(build_column(available_fields))
 
-    output_path = os.path.join(TEMPLATE_DIR, f"{template_name}.json")
-    with open(output_path, "w", encoding="utf-8") as f:
+    path = os.path.join(TEMPLATE_DIR, f"{template_name}.json")
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(template, f, indent=2)
 
-    print(f"\n✅ Template saved to: {output_path}")
+    print(f"\n✅ Template saved: {path}")
 
 if __name__ == "__main__":
     main()
