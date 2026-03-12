@@ -122,12 +122,14 @@ def generate_excel_from_template(template_path=None):
     if merged.empty:
         raise ValueError("❌ No compounds matched between compounds and compound_properties_wide.")
 
-    # 🔬 TEST BLOCK: Select 5 random rows for testing
-    print("🧪 Using a random sample of 5 compounds for test export...")
-    if len(merged) >= 5:
-        merged = merged.sample(5, random_state=42)
-    else:
-        print("⚠️ Less than 5 compounds in the database. Exporting all available.")
+    sample_size_env = os.getenv("EXCEL_SAMPLE_SIZE", "").strip()
+    sample_size = int(sample_size_env) if sample_size_env.isdigit() else 0
+    if sample_size > 0:
+        print(f"🧪 Using a random sample of {sample_size} compounds for test export...")
+        if len(merged) > sample_size:
+            merged = merged.sample(sample_size, random_state=42)
+        else:
+            print("⚠️ Sample size exceeds available compounds. Exporting all available.")
 
     wb = Workbook()
     ws = wb.active
@@ -135,6 +137,7 @@ def generate_excel_from_template(template_path=None):
 
     headers = [col.get("header", "") for col in template["columns"]]
     ws.append(headers)
+    temp_image_paths = []
 
     for index, row in merged.iterrows():
         excel_row = []
@@ -214,6 +217,7 @@ def generate_excel_from_template(template_path=None):
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         composite_path = tmp.name
                         composite_img.save(composite_path)
+                    temp_image_paths.append(composite_path)
                     img = ExcelImage(composite_path)
                     cell = ws.cell(row=i + 2, column=j + 1)
                     img.anchor = cell.coordinate
@@ -245,6 +249,13 @@ def generate_excel_from_template(template_path=None):
         )
 
     wb.save(EXCEL_PATH)
+
+    for temp_path in temp_image_paths:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
     print(f"\n✅ Excel generated using template: {template_path}")
 
 if __name__ == "__main__":

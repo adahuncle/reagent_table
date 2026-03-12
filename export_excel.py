@@ -119,6 +119,7 @@ def generate_excel_from_template(template_path=None):
 
     headers = [col.get("header", "") for col in template["columns"]]
     ws.append(headers)
+    temp_image_paths = []
 
     for index, row in merged.iterrows():
         excel_row = []
@@ -194,6 +195,7 @@ def generate_excel_from_template(template_path=None):
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         composite_path = tmp.name
                         composite_img.save(composite_path)
+                    temp_image_paths.append(composite_path)
                     img = ExcelImage(composite_path)
                     cell = ws.cell(row=i + 2, column=j + 1)
                     img.anchor = cell.coordinate
@@ -218,6 +220,13 @@ def generate_excel_from_template(template_path=None):
         )
 
     wb.save(EXCEL_PATH)
+
+    for temp_path in temp_image_paths:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+
     print(f"\n✅ Excel generated using template: {template_path}")
 
 if __name__ == "__main__":

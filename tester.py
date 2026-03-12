@@ -22,8 +22,11 @@ print(df[df["property_value"].isin(["None", "", "Not available", "N/A"])])
 
 # After querying a compound like 'sulfuric acid' or 'benzene'
 
-# View raw hazard fields
-df = pd.read_sql_query("SELECT * FROM properties WHERE category = 'Hazards'", conn)
+# View raw hazard fields (supports both legacy and current category names)
+df = pd.read_sql_query(
+    "SELECT * FROM properties WHERE lower(category) IN ('hazard', 'hazards')",
+    conn,
+)
 
 print("\n🧯 Hazard fields:")
 print(df["property_name"].value_counts())

@@ -5,13 +5,50 @@ import pandas as pd
 import time
 import re
 import html
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 VIEW_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound"
 DB_PATH = "compounds.db"
 IMAGE_DIR = "structure_images"
+REQUEST_TIMEOUT_SECONDS = 20
+RETRY_TOTAL = 3
+RETRY_BACKOFF = 0.5
 
 os.makedirs(IMAGE_DIR, exist_ok=True)
+
+
+def _build_retry_session():
+    retry = Retry(
+        total=RETRY_TOTAL,
+        connect=RETRY_TOTAL,
+        read=RETRY_TOTAL,
+        status=RETRY_TOTAL,
+        backoff_factor=RETRY_BACKOFF,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+SESSION = _build_retry_session()
+
+
+def _get_json(url):
+    response = SESSION.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.json()
+
+
+def _get_bytes(url):
+    response = SESSION.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.content
 
 def summarize_text(text, max_lines=5):
     if not isinstance(text, str):
@@ -21,12 +58,15 @@ def summarize_text(text, max_lines=5):
 
 def normalize_property(prop_name, value):
     prop_name = str(prop_name)
+
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+
     value = html.unescape(value)
     value = re.sub(r"[^\x00-\x7F°±µ]+", " ", value)
     value = value.replace("•", "-")
-
-    if not isinstance(value, str):
-        return value
 
     value = value.strip()
     lower_name = prop_name.lower()
@@ -39,7 +79,8 @@ def normalize_property(prop_name, value):
         return ""
 
     # 🔢 Extract numeric if applicable
-    # if any(key in lower_name for key in ["mass", "weight", "boiling", "melting", "logp", "density", "ph"]):
+    numeric_keys = ("mass", "weight", "boiling", "melting", "logp", "density", "ph", "pressure", "viscosity")
+    if any(key in lower_name for key in numeric_keys):
         match = re.search(r"[-+]?[0-9]*\.?[0-9]+", value)
         if match:
             return match.group(0)
@@ -85,27 +126,21 @@ def extract_hazard_and_first_aid(hazards_dict):
 
 def get_cid_by_name(name):
     url = f"{BASE_URL}/compound/name/{name}/cids/JSON"
-    r = requests.get(url)
-    r.raise_for_status()
-    return r.json()["IdentifierList"]["CID"][0]
+    data = _get_json(url)
+    return data["IdentifierList"]["CID"][0]
 
 def get_properties_by_cid(cid):
     url = f"{BASE_URL}/compound/cid/{cid}/property/IUPACName,MolecularFormula,MolecularWeight,CanonicalSMILES/JSON"
-    r = requests.get(url)
-    r.raise_for_status()
-    return r.json()["PropertyTable"]["Properties"][0]
+    data = _get_json(url)
+    return data["PropertyTable"]["Properties"][0]
 
 def get_full_record(cid):
     url = f"{BASE_URL}/compound/cid/{cid}/record/JSON"
-    r = requests.get(url)
-    r.raise_for_status()
-    return r.json()
+    return _get_json(url)
 
 def get_pug_view_data(cid):
     url = f"{VIEW_URL}/{cid}/JSON"
-    r = requests.get(url)
-    r.raise_for_status()
-    return r.json()
+    return _get_json(url)
 
 def extract_common_name(view_data):
     try:
@@ -201,12 +236,12 @@ def extract_use_properties(view_data):
 
 def save_structure_image(cid, compound_name):
     image_url = f"{BASE_URL}/compound/cid/{cid}/PNG"
-    r = requests.get(image_url)
-    r.raise_for_status()
-    filename = f"{compound_name.replace(' ', '_')}_{cid}.png"
+    image_bytes = _get_bytes(image_url)
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(compound_name)).strip("_") or f"cid_{cid}"
+    filename = f"{safe_name}_{cid}.png"
     path = os.path.join(IMAGE_DIR, filename)
     with open(path, "wb") as f:
-        f.write(r.content)
+        f.write(image_bytes)
     return path
 
 def init_db():
@@ -302,14 +337,30 @@ def build_wide_properties_table(conn):
     df_wide.to_sql("compound_properties_wide", conn, if_exists="replace", index=False)
     print("📊 Wide-format properties table generated: compound_properties_wide")
 
-def process_compound_name(name):
+
+def rebuild_wide_properties_table():
+    conn = init_db()
+    try:
+        build_wide_properties_table(conn)
+    finally:
+        conn.close()
+
+
+def _resolve_cid(query):
+    query_text = str(query).strip()
+    if query_text.isdigit():
+        return int(query_text)
+    return get_cid_by_name(query_text)
+
+def process_compound_name(name, rebuild_wide=True):
     try:
         print(f"🔍 Searching PubChem for: {name}")
-        cid = get_cid_by_name(name)
+        cid = _resolve_cid(name)
         props = get_properties_by_cid(cid)
         record_json = get_full_record(cid)
         view_json = get_pug_view_data(cid)
-        image_path = save_structure_image(cid, name)
+        image_label = props.get("IUPACName") or str(name)
+        image_path = save_structure_image(cid, image_label)
         common_name = extract_common_name(view_json)
         print(f"📛 Common Name selected: {common_name}")
 
@@ -343,7 +394,8 @@ def process_compound_name(name):
                 insert_properties(conn, cid, "Hazard", {"First Aid Measures": first_aid})
 
 
-        build_wide_properties_table(conn)
+        if rebuild_wide:
+            build_wide_properties_table(conn)
         conn.close()
 
         print("\n✅ Compound Saved:")
@@ -354,17 +406,24 @@ def process_compound_name(name):
         print(f"SMILES: {props.get('CanonicalSMILES')}")
         print(f"Image Path: {image_path}")
         print(f"🧪 {len(computed) + len(experimental)} properties stored.")
+        return True
 
     except requests.exceptions.HTTPError as e:
         print(f"❌ HTTP Error: {e}")
     except Exception as e:
         print(f"⚠️ Unexpected Error: {e}")
+    return False
 
 if __name__ == "__main__":
     input_str = input("Enter compound name(s), comma-separated: ").strip()
     names = [name.strip() for name in input_str.split(',') if name.strip()]
 
+    any_success = False
     for name in names:
         print("\n" + "="*50)
-        process_compound_name(name)
+        if process_compound_name(name, rebuild_wide=False):
+            any_success = True
         time.sleep(1)
+
+    if any_success:
+        rebuild_wide_properties_table()

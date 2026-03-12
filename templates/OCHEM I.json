@@ -1,0 +1,45 @@
+{
+  "columns": [
+    {
+      "type": "composite",
+      "header": "Name & Formula",
+      "components": [
+        {
+          "type": "text",
+          "source": "core",
+          "field": "name"
+        },
+        {
+          "type": "text",
+          "source": "core",
+          "field": "formula"
+        }
+      ],
+      "text_position": "bottom"
+    },
+    {
+      "type": "image",
+      "header": "Structure",
+      "field": "image_path"
+    },
+    {
+      "type": "composite",
+      "header": "Hazards & First Aid",
+      "components": [
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "Hazards",
+          "prefix": "Hazards:"
+        },
+        {
+          "type": "text",
+          "source": "properties",
+          "field": "First Aid Measures",
+          "prefix": "First Aid:"
+        }
+      ],
+      "text_position": "bottom"
+    }
+  ]
+}

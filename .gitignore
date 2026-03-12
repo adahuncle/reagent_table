@@ -1,0 +1,23 @@
+# Python cache/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Local runtime outputs
+compounds.db
+compound_report.xlsx
+
+# Generated folders
+structure_images/
+hazard_exports/
+pubchem_raw_json/
+_extracted_reagent_table/
+
+# OS/editor artifacts
+.DS_Store
+Thumbs.db
